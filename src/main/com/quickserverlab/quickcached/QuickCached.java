@@ -2,6 +2,9 @@ package com.quickserverlab.quickcached;
 
 import org.quickserver.net.*;
 import org.quickserver.net.server.*;
+import org.quickserver.util.xmlreader.Secure;
+
+import com.quickserverlab.quickcached.handler.UserAuthenticationHandler;
 
 import java.io.*;
 import java.lang.management.ManagementFactory;
@@ -14,13 +17,14 @@ public class QuickCached {
     public static String version = "2.0.2";
     public static boolean DEBUG = false;
 	private static QuickServer quickcached;
+	public static Map configMap;
 
     public static void main(String args[]) throws Exception {
         int i = 0;
         String arg = null;
         String value = null;
 
-		
+       
 		if(args.length!=0) {
 			while (i < args.length) {
 				arg = args[i];
@@ -59,12 +63,12 @@ public class QuickCached {
         quickcached = new QuickServer();
         quickcached.initService(config);
 		
-		Map configMap = quickcached.getConfig().getApplicationConfiguration();
+		configMap = quickcached.getConfig().getApplicationConfiguration();
 		version = (String) configMap.get("MEMCACHED_VERSION_TO_SHOW");
 		if(version==null) {
 			version = "1.4.6";
 		}
-		
+		//quickcached.setClientAuthenticationHandler("com.quickserverlab.quickcached.handler.UserAuthenticationHandler");
 
         //CLI
         //-l <ip_addr>

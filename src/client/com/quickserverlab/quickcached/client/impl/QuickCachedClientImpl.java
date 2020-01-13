@@ -2,11 +2,11 @@ package com.quickserverlab.quickcached.client.impl;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.net.InetSocketAddress;
-import java.net.SocketTimeoutException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -20,12 +20,9 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import com.quickserverlab.quickcached.client.CASResponse;
-import com.quickserverlab.quickcached.client.CASValue;
-import com.quickserverlab.quickcached.client.GenericResponse;
-import com.quickserverlab.quickcached.client.MemcachedClient;
-import com.quickserverlab.quickcached.client.MemcachedException;
-import com.quickserverlab.quickcached.client.TimeoutException;
+
+import javax.security.sasl.AuthenticationException;
+
 import org.quickserver.net.client.BlockingClient;
 import org.quickserver.net.client.ClientInfo;
 import org.quickserver.net.client.Host;
@@ -39,6 +36,16 @@ import org.quickserver.net.client.monitoring.impl.SocketMonitor;
 import org.quickserver.net.client.pool.BlockingClientPool;
 import org.quickserver.net.client.pool.PoolableBlockingClient;
 import org.quickserver.net.client.pool.PooledBlockingClient;
+import org.quickserver.net.server.QuickServer;
+
+import com.quickserverlab.quickcached.QuickCached;
+//import com.quickserverlab.quickcached.QuickCached;
+import com.quickserverlab.quickcached.client.CASResponse;
+import com.quickserverlab.quickcached.client.CASValue;
+import com.quickserverlab.quickcached.client.GenericResponse;
+import com.quickserverlab.quickcached.client.MemcachedClient;
+import com.quickserverlab.quickcached.client.MemcachedException;
+import com.quickserverlab.quickcached.client.TimeoutException;
 
 /**
  *
@@ -46,25 +53,27 @@ import org.quickserver.net.client.pool.PooledBlockingClient;
  */
 public class QuickCachedClientImpl extends MemcachedClient {
 	private static final Logger logger = Logger.getLogger(QuickCachedClientImpl.class.getName());
-	
-    protected static final int FLAGS_GENRIC_STRING = 0;
+
+	protected static final int FLAGS_GENRIC_STRING = 0;
 	protected static final int FLAGS_GENRIC_OBJECT = 1;
-        
-	protected static String charset = "ISO-8859-1";//"utf-8";
+
+	protected static String charset = "ISO-8859-1";// "utf-8";
 	private String hostList;
 	private boolean binaryConnection = false;
 	private int poolSize = 5;
 	private int minPoolSize = 4;
 	private int idlePoolSize = 8;
 	private int maxPoolSize = 16;
-	
-	private long noOpTimeIntervalMiliSec = 1000*60;//60 sec
-	private int hostMonitoringIntervalInSec = 15;//15sec
-	private int maxIntervalForBorrowInSec = 4;//4 sec
-	private int logPoolIntervalTimeMin = 10;//10min
+
+	private long noOpTimeIntervalMiliSec = 1000 * 60;// 60 sec
+	private int hostMonitoringIntervalInSec = 15;// 15sec
+	private int maxIntervalForBorrowInSec = 4;// 4 sec
+	private int logPoolIntervalTimeMin = 10;// 10min
 	private BlockingClientPool blockingClientPool;
 	private HostList hostListObj;
 	private boolean debug;
+
+	private static QuickServer quickcached;
 
 	private void updatePoolSizes() {
 		minPoolSize = poolSize / 2;
@@ -93,46 +102,53 @@ public class QuickCachedClientImpl extends MemcachedClient {
 		throw new UnsupportedOperationException("Not supported yet.");
 	}
 
-	public void init() throws IOException {
+	static {
+		String confFile = "conf" + File.separator + "QuickCached.xml";
+		Object config[] = new Object[] { confFile };
+		quickcached = new QuickServer();
+		quickcached.initService(config);
+	}
+
+	public void init() throws IOException, AuthenticationException {
+		doAuth();
 		hostListObj = new HostList("memcached_" + hostList);
 		updatePoolSizes();
-                
+
 		String servers[] = hostList.split(" ");
 		String server[] = null;
 		SocketBasedHost sbh = null;
 		for (int i = 0; i < servers.length; i++) {
-                        if(servers[i].contains(":")==false) {
-                            continue;
-                        }
-                    
-			server = servers[i].split(":");
-                        
-                        if(server[0].trim().isEmpty()) {
-                            continue;
-                        }
-                        if(server[1].trim().isEmpty()) {
-                            continue;
-                        }
-                        
-			try {
-				sbh = new SocketBasedHost(server[0].trim(), 
-					Integer.parseInt(server[1].trim()));
-			} catch (Exception ex) {
-				Logger.getLogger(QuickCachedClientImpl.class.getName()).log(
-					Level.SEVERE, "Error: " + ex, ex);
+			if (servers[i].contains(":") == false) {
+				continue;
 			}
-			sbh.setTimeout((int)getDefaultTimeoutMiliSec());
+
+			server = servers[i].split(":");
+
+			if (server[0].trim().isEmpty()) {
+				continue;
+			}
+			if (server[1].trim().isEmpty()) {
+				continue;
+			}
+
+			try {
+				sbh = new SocketBasedHost(server[0].trim(), Integer.parseInt(server[1].trim()));
+			} catch (Exception ex) {
+				Logger.getLogger(QuickCachedClientImpl.class.getName()).log(Level.SEVERE, "Error: " + ex, ex);
+			}
+			sbh.setTimeout((int) getDefaultTimeoutMiliSec());
 			sbh.setRequestText("version\r\n");
 			sbh.setResponseTextToExpect("VERSION ");
-			
+			sbh.setSecure(true);
+
 			hostListObj.add(sbh);
 		}
-		
+
 		final SocketMonitor sm = new SocketMonitor();
-		
+
 		final LoadDistributor ld = new LoadDistributor(hostListObj);
 		ld.setLoadPattern(new HashedLoadPattern());
-		
+
 		PoolableBlockingClient poolableBlockingClient = new PoolableBlockingClient() {
 			public HostMonitor getHostMonitor() {
 				return sm;
@@ -145,11 +161,12 @@ public class QuickCachedClientImpl extends MemcachedClient {
 			public BlockingClient createBlockingClient(SocketBasedHost host) {
 				BlockingClient bc = new BlockingClient();
 				try {
-					bc.connect(host.getInetAddress().getHostAddress(), host
-							.getInetSocketAddress().getPort());
+
+					bc.connect(host.getInetAddress().getHostAddress(), host.getInetSocketAddress().getPort());
 					bc.getSocket().setTcpNoDelay(true);
 					bc.getSocket().setSoTimeout((int) getDefaultTimeoutMiliSec());
 					bc.getSocket().setSoLinger(true, 10);
+
 					return bc;
 				} catch (Exception ex) {
 					logger.log(Level.WARNING, "Error: " + ex, ex);
@@ -209,9 +226,8 @@ public class QuickCachedClientImpl extends MemcachedClient {
 				return maxIntervalForBorrowInSec;
 			}
 		};
-		
-		blockingClientPool = new BlockingClientPool("memcached_"+hostList,
-				poolableBlockingClient);
+
+		blockingClientPool = new BlockingClientPool("memcached_" + hostList, poolableBlockingClient);
 		blockingClientPool.setDebug(isDebug());
 
 		blockingClientPool.setMinPoolSize(minPoolSize);
@@ -221,11 +237,11 @@ public class QuickCachedClientImpl extends MemcachedClient {
 		HostStateListener hsl = new HostStateListener() {
 			public void stateChanged(Host host, char oldstatus, char newstatus) {
 				if (oldstatus != Host.UNKNOWN) {
-					logger.log(Level.SEVERE, "State changed: {0}; old state: {1};new state: {2}", 
-						new Object[]{host, oldstatus, newstatus});
+					logger.log(Level.SEVERE, "State changed: {0}; old state: {1};new state: {2}",
+							new Object[] { host, oldstatus, newstatus });
 				} else {
-					logger.log(Level.INFO, "State changed: {0}; old state: {1};new state: {2}", 
-						new Object[]{host, oldstatus, newstatus});
+					logger.log(Level.INFO, "State changed: {0}; old state: {1};new state: {2}",
+							new Object[] { host, oldstatus, newstatus });
 				}
 			}
 		};
@@ -259,16 +275,16 @@ public class QuickCachedClientImpl extends MemcachedClient {
 			bc.sendBytes(data, charset);
 
 			return bc.readCRLFLine();
-		} catch (IOException e) {            
-            if (pbc != null) {
+		} catch (IOException e) {
+			if (pbc != null) {
 				logger.log(Level.WARNING, "We had an ioerror will close client! " + e, e);
 				pbc.close();
 			}
-            if(e instanceof TimeoutException) {
-                throw (TimeoutException) e;
-            } else {
-                throw new TimeoutException("We had ioerror " + e);
-            }	
+			if (e instanceof TimeoutException) {
+				throw (TimeoutException) e;
+			} else {
+				throw new TimeoutException("We had ioerror " + e);
+			}
 		} finally {
 			if (pbc != null) {
 				blockingClientPool.returnBlockingClient(pbc);
@@ -303,9 +319,7 @@ public class QuickCachedClientImpl extends MemcachedClient {
 			}
 
 			/*
-			 VALUE <key> <flags> <bytes> [<cas unique>]\r\n
-			 <data block>\r\n
-			 END\r\n
+			 * VALUE <key> <flags> <bytes> [<cas unique>]\r\n <data block>\r\n END\r\n
 			 */
 
 			if (resMain.startsWith("VALUE ")) {
@@ -316,14 +330,13 @@ public class QuickCachedClientImpl extends MemcachedClient {
 				int flag = Integer.parseInt(cmdData[2]);
 				int bytes = Integer.parseInt(cmdData[3]);
 
-
 				if (cmdData.length >= 5) {
 					casUnique = Long.parseLong(cmdData[4]);
 				}
 
 				byte[] dataBuff = bc.readBytes(bytes);
 
-				//read the footer 7 char extra \r\nEND\r\n
+				// read the footer 7 char extra \r\nEND\r\n
 				bc.readBytes(7);
 
 				if (dataBuff == null) {
@@ -346,11 +359,11 @@ public class QuickCachedClientImpl extends MemcachedClient {
 				logger.log(Level.WARNING, "We had an ioerror will close client! " + e, e);
 				pbc.close();
 			}
-            if(e instanceof TimeoutException) {
-                throw (TimeoutException) e;
-            } else {
-                throw new TimeoutException("We had ioerror " + e);
-            }			
+			if (e instanceof TimeoutException) {
+				throw (TimeoutException) e;
+			} else {
+				throw new TimeoutException("We had ioerror " + e);
+			}
 		} finally {
 			if (pbc != null) {
 				blockingClientPool.returnBlockingClient(pbc);
@@ -367,7 +380,7 @@ public class QuickCachedClientImpl extends MemcachedClient {
 		}
 	}
 
-	public void set(String key, int ttlSec, Object value, long timeoutMiliSec) 
+	public void set(String key, int ttlSec, Object value, long timeoutMiliSec)
 			throws TimeoutException, MemcachedException {
 		try {
 			StringBuilder sb = new StringBuilder();
@@ -383,11 +396,11 @@ public class QuickCachedClientImpl extends MemcachedClient {
 				valueBytes = getObjectBytes(value);
 				flag = FLAGS_GENRIC_OBJECT;
 			}
-			
+
 			validateKey(key);
 			validateValue(key, valueBytes);
 
-			//<command name> <key> <flags> <exptime> <bytes> [noreply]\r\n
+			// <command name> <key> <flags> <exptime> <bytes> [noreply]\r\n
 			sb.append("set ").append(key).append(" ").append(flag);
 			sb.append(" ").append(ttlSec).append(" ").append(valueBytes.length);
 			sb.append("\r\n");
@@ -411,8 +424,7 @@ public class QuickCachedClientImpl extends MemcachedClient {
 		}
 	}
 
-	public boolean add(String key, int ttlSec, Object value, long timeoutMiliSec)
-		throws TimeoutException {
+	public boolean add(String key, int ttlSec, Object value, long timeoutMiliSec) throws TimeoutException {
 		try {
 			StringBuilder sb = new StringBuilder();
 
@@ -427,11 +439,11 @@ public class QuickCachedClientImpl extends MemcachedClient {
 				valueBytes = getObjectBytes(value);
 				flag = FLAGS_GENRIC_OBJECT;
 			}
-			
+
 			validateKey(key);
 			validateValue(key, valueBytes);
 
-			//<command name> <key> <flags> <exptime> <bytes> [noreply]\r\n
+			// <command name> <key> <flags> <exptime> <bytes> [noreply]\r\n
 			sb.append("add ").append(key).append(" ").append(flag);
 			sb.append(" ").append(ttlSec).append(" ").append(valueBytes.length);
 			sb.append("\r\n");
@@ -455,8 +467,7 @@ public class QuickCachedClientImpl extends MemcachedClient {
 		}
 	}
 
-	public boolean replace(String key, int ttlSec, Object value, long timeoutMiliSec)
-		throws TimeoutException {
+	public boolean replace(String key, int ttlSec, Object value, long timeoutMiliSec) throws TimeoutException {
 		try {
 			StringBuilder sb = new StringBuilder();
 
@@ -471,11 +482,11 @@ public class QuickCachedClientImpl extends MemcachedClient {
 				valueBytes = getObjectBytes(value);
 				flag = FLAGS_GENRIC_OBJECT;
 			}
-			
+
 			validateKey(key);
 			validateValue(key, valueBytes);
 
-			//<command name> <key> <flags> <exptime> <bytes> [noreply]\r\n
+			// <command name> <key> <flags> <exptime> <bytes> [noreply]\r\n
 			sb.append("replace ").append(key).append(" ").append(flag);
 			sb.append(" ").append(ttlSec).append(" ").append(valueBytes.length);
 			sb.append("\r\n");
@@ -515,11 +526,11 @@ public class QuickCachedClientImpl extends MemcachedClient {
 				valueBytes = getObjectBytes(value);
 				flag = FLAGS_GENRIC_OBJECT;
 			}
-			
+
 			validateKey(key);
 			validateValue(key, valueBytes);
 
-			//<command name> <key> <flags> <exptime> <bytes> [noreply]\r\n
+			// <command name> <key> <flags> <exptime> <bytes> [noreply]\r\n
 			sb.append("append ").append(key).append(" ").append(flag);
 			sb.append(" ").append("0").append(" ").append(valueBytes.length);
 			sb.append("\r\n");
@@ -543,8 +554,7 @@ public class QuickCachedClientImpl extends MemcachedClient {
 		}
 	}
 
-	public boolean append(long cas, String key, Object value, long timeoutMiliSec)
-		throws TimeoutException {
+	public boolean append(long cas, String key, Object value, long timeoutMiliSec) throws TimeoutException {
 		return append(key, value, timeoutMiliSec);
 	}
 
@@ -564,11 +574,11 @@ public class QuickCachedClientImpl extends MemcachedClient {
 				valueBytes = getObjectBytes(value);
 				flag = FLAGS_GENRIC_OBJECT;
 			}
-			
+
 			validateKey(key);
 			validateValue(key, valueBytes);
 
-			//<command name> <key> <flags> <exptime> <bytes> [noreply]\r\n
+			// <command name> <key> <flags> <exptime> <bytes> [noreply]\r\n
 			sb.append("prepend ").append(key).append(" ").append(flag);
 			sb.append(" ").append("0").append(" ").append(valueBytes.length);
 			sb.append("\r\n");
@@ -592,16 +602,14 @@ public class QuickCachedClientImpl extends MemcachedClient {
 		}
 	}
 
-	public boolean prepend(long cas, String key, Object value, long timeoutMiliSec)
-		throws TimeoutException {
+	public boolean prepend(long cas, String key, Object value, long timeoutMiliSec) throws TimeoutException {
 		return prepend(key, value, timeoutMiliSec);
 	}
 
-	public Object get(String key, long timeoutMiliSec)
-			throws MemcachedException, TimeoutException {
-		
+	public Object get(String key, long timeoutMiliSec) throws MemcachedException, TimeoutException {
+
 		validateKey(key);
-			
+
 		CASValue casv = gets(key, timeoutMiliSec);
 		if (casv == null) {
 			return null;
@@ -640,11 +648,11 @@ public class QuickCachedClientImpl extends MemcachedClient {
 				logger.log(Level.WARNING, "We had an ioerror will close client! " + e, e);
 				pbc.close();
 			}
-            if(e instanceof TimeoutException) {
-                throw (TimeoutException) e;
-            } else {
-                throw new TimeoutException("We had ioerror " + e);
-            }			
+			if (e instanceof TimeoutException) {
+				throw (TimeoutException) e;
+			} else {
+				throw new TimeoutException("We had ioerror " + e);
+			}
 		} finally {
 			if (pbc != null) {
 				blockingClientPool.returnBlockingClient(pbc);
@@ -655,9 +663,9 @@ public class QuickCachedClientImpl extends MemcachedClient {
 	public boolean delete(String key, long timeoutMiliSec) throws TimeoutException {
 		try {
 			validateKey(key);
-			
+
 			StringBuilder sb = new StringBuilder();
-			//delete <key> [noreply]\r\n
+			// delete <key> [noreply]\r\n
 			sb.append("delete ").append(key).append("\r\n");
 
 			String res = sendCmdOut(key, sb.toString());
@@ -707,7 +715,7 @@ public class QuickCachedClientImpl extends MemcachedClient {
 	public void flushAll() throws TimeoutException {
 		try {
 			StringBuilder sb = new StringBuilder();
-			//noreply [noreply]\r\n
+			// noreply [noreply]\r\n
 			sb.append("flush_all noreply").append("\r\n");
 
 			sendCmdOutToAll(sb.toString());
@@ -760,7 +768,7 @@ public class QuickCachedClientImpl extends MemcachedClient {
 		Map<String, String> map = new HashMap<String, String>();
 		try {
 			StringBuilder sb = new StringBuilder();
-			//stats\r\n
+			// stats\r\n
 			sb.append("stats").append("\r\n");
 
 			bc.sendBytes(sb.toString(), charset);
@@ -772,7 +780,7 @@ public class QuickCachedClientImpl extends MemcachedClient {
 				if (line == null || line.equals("END")) {
 					break;
 				}
-				//STAT <name> <value>\r\n
+				// STAT <name> <value>\r\n
 				if (line.startsWith("STAT ") == false) {
 					throw new Exception("We had bad stats output!" + line);
 				}
@@ -825,7 +833,7 @@ public class QuickCachedClientImpl extends MemcachedClient {
 		Map<String, String> map = new HashMap<String, String>();
 		try {
 			StringBuilder sb = new StringBuilder();
-			//version\r\n
+			// version\r\n
 			sb.append("version").append("\r\n");
 
 			bc.sendBytes(sb.toString(), charset);
@@ -834,7 +842,7 @@ public class QuickCachedClientImpl extends MemcachedClient {
 			if (line == null) {
 				throw new TimeoutException("We had EOF");
 			}
-			//VERSION <version>\r\n
+			// VERSION <version>\r\n
 
 			return line.substring(8);
 		} catch (TimeoutException ex) {
@@ -904,7 +912,7 @@ public class QuickCachedClientImpl extends MemcachedClient {
 	public boolean touch(String key, int ttlSec, long timeoutMiliSec) throws TimeoutException {
 		try {
 			StringBuilder sb = new StringBuilder();
-			//touch <key> <exptime> [noreply]\r\n
+			// touch <key> <exptime> [noreply]\r\n
 			sb.append("touch ").append(key).append(" ").append(ttlSec).append("\r\n");
 
 			ClientInfo ci = new ClientInfo();
@@ -933,14 +941,13 @@ public class QuickCachedClientImpl extends MemcachedClient {
 	}
 
 	@Override
-	public CASValue gets(String key, long timeoutMiliSec)
-			throws TimeoutException, MemcachedException {
+	public CASValue gets(String key, long timeoutMiliSec) throws TimeoutException, MemcachedException {
 		validateKey(key);
-		
+
 		CASValue casObject = null;
 		try {
 			StringBuilder sb = new StringBuilder();
-			//get <key>*\r\n
+			// get <key>*\r\n
 			sb.append("get ").append(key).append("\r\n");
 
 			casObject = readDataOutCAS(key, sb.toString());
@@ -953,10 +960,10 @@ public class QuickCachedClientImpl extends MemcachedClient {
 	}
 
 	@Override
-	public CASResponse cas(String key, Object value, int ttlSec, long cas, 
-			long timeoutMiliSec) throws TimeoutException, MemcachedException {
+	public CASResponse cas(String key, Object value, int ttlSec, long cas, long timeoutMiliSec)
+			throws TimeoutException, MemcachedException {
 		validateKey(key);
-		
+
 		try {
 			StringBuilder sb = new StringBuilder();
 
@@ -972,7 +979,7 @@ public class QuickCachedClientImpl extends MemcachedClient {
 				flag = FLAGS_GENRIC_OBJECT;
 			}
 
-			//cas <key> <flags> <exptime> <bytes> <cas unique> [noreply]\r\n
+			// cas <key> <flags> <exptime> <bytes> <cas unique> [noreply]\r\n
 			sb.append("cas ").append(key).append(" ").append(flag);
 			sb.append(" ").append(ttlSec).append(" ").append(valueBytes.length);
 			sb.append(" ").append(cas).append("\r\n");
@@ -1002,8 +1009,7 @@ public class QuickCachedClientImpl extends MemcachedClient {
 		}
 	}
 
-	public Map<Integer, StringBuilder> getCommandsForKeys(Collection<String> keys)
-		throws MemcachedException {
+	public Map<Integer, StringBuilder> getCommandsForKeys(Collection<String> keys) throws MemcachedException {
 		List activeList = hostListObj.getActiveList();
 		String commandString = "get ";
 		if (activeList == null || activeList.isEmpty()) {
@@ -1011,21 +1017,21 @@ public class QuickCachedClientImpl extends MemcachedClient {
 		}
 		int size = activeList.size();
 
-		//Keys seperated depending on the host assigned for it
-		//Assuming there will be no changes in the activeList size.
+		// Keys seperated depending on the host assigned for it
+		// Assuming there will be no changes in the activeList size.
 		Map<Integer, StringBuilder> commandsMap = new HashMap<Integer, StringBuilder>(size);
 		try {
 			for (String key : keys) {
 				if (key == null) {
-					//skip
+					// skip
 				} else {
-					//code from org.quickserver.net.client.loaddistribution.impl.HashedLoadPattern
+					// code from org.quickserver.net.client.loaddistribution.impl.HashedLoadPattern
 					int hash = key.hashCode();
 					int mod = hash % size;
 					if (mod < 0) {
 						mod = mod * -1;
 					}
-					//--
+					// --
 
 					if (commandsMap.get(mod) != null) {
 						commandsMap.get(mod).append(" ").append(key);
@@ -1035,20 +1041,20 @@ public class QuickCachedClientImpl extends MemcachedClient {
 				}
 			}
 		} catch (Exception e) {
-			//log exception
+			// log exception
 			throw new MemcachedException("Invalid key/s found " + e);
 		}
 		return commandsMap;
 	}
 
 	@Override
-	public <T> Map<String, T> getBulk(Collection<String> keyCollection,
-			long timeoutMiliSec) throws TimeoutException, MemcachedException {
+	public <T> Map<String, T> getBulk(Collection<String> keyCollection, long timeoutMiliSec)
+			throws TimeoutException, MemcachedException {
 		return get(keyCollection, timeoutMiliSec);
 	}
 
-	public <T> Map<String, T> get(Collection<String> keyCollection,
-			long timeoutMiliSec) throws TimeoutException, MemcachedException {
+	public <T> Map<String, T> get(Collection<String> keyCollection, long timeoutMiliSec)
+			throws TimeoutException, MemcachedException {
 		if (keyCollection == null || keyCollection.isEmpty()) {
 			return null;
 		}
@@ -1058,37 +1064,34 @@ public class QuickCachedClientImpl extends MemcachedClient {
 			throw new MemcachedException("Error: bad key passed!");
 		}
 
-		//TODO look to re-use the pool
+		// TODO look to re-use the pool
 		ExecutorService exec = null;
 		Map<String, T> result = new HashMap<String, T>();
 		try {
 			exec = Executors.newFixedThreadPool(commands.size());
-			List<Future<List<GenericResponse>>> res = new ArrayList<Future<List<GenericResponse>>>();			
+			List<Future<List<GenericResponse>>> res = new ArrayList<Future<List<GenericResponse>>>();
 
 			for (StringBuilder commandSB : commands.values()) {
 				String command = commandSB.toString();
 				String commandKeys[] = command.split(" ");
-				if (commandKeys.length >= 2) {				
+				if (commandKeys.length >= 2) {
 					StringBuilder cmd = new StringBuilder(command).append("\r\n");
 
 					ClientInfo ci = new ClientInfo();
-					ci.setClientKey(commandKeys[(commandKeys.length - 1)]);//last key
+					ci.setClientKey(commandKeys[(commandKeys.length - 1)]);// last key
 					PooledBlockingClient pbc = null;
 					try {
 						pbc = blockingClientPool.getBlockingClient(ci);
 						if (pbc == null) {
-							throw new TimeoutException(
-								"we do not have any client[pbc] to connect to server!");
+							throw new TimeoutException("we do not have any client[pbc] to connect to server!");
 						}
 
 						BlockingClient bc = pbc.getBlockingClient();
 						if (bc == null) {
-							throw new TimeoutException(
-								"we do not have any client[bc] to connect to server!");
+							throw new TimeoutException("we do not have any client[bc] to connect to server!");
 						}
 
-						res.add(exec.submit(
-							new MultiLineResCommandRunner(blockingClientPool, cmd.toString(), pbc)));
+						res.add(exec.submit(new MultiLineResCommandRunner(blockingClientPool, cmd.toString(), pbc)));
 
 					} catch (Exception e) {
 						if (pbc != null) {
@@ -1104,8 +1107,7 @@ public class QuickCachedClientImpl extends MemcachedClient {
 
 			try {
 				for (Future<List<GenericResponse>> futureObj : res) {
-					List<GenericResponse> resultPart = futureObj.get(
-						timeoutMiliSec, TimeUnit.MILLISECONDS);
+					List<GenericResponse> resultPart = futureObj.get(timeoutMiliSec, TimeUnit.MILLISECONDS);
 					for (GenericResponse entry : resultPart) {
 						if (entry != null) {
 							result.put(entry.getKey(), (T) entry.getValue());
@@ -1120,7 +1122,7 @@ public class QuickCachedClientImpl extends MemcachedClient {
 				throw new MemcachedException("Error occured " + ex);
 			}
 		} finally {
-			if(exec!=null) {
+			if (exec != null) {
 				exec.shutdown();
 			}
 		}
@@ -1129,27 +1131,25 @@ public class QuickCachedClientImpl extends MemcachedClient {
 
 	/* incr */
 	@Override
-	public long increment(String key, int delta, long timeoutMiliSec) 
-			throws TimeoutException, MemcachedException {
+	public long increment(String key, int delta, long timeoutMiliSec) throws TimeoutException, MemcachedException {
 		return increment(key, delta, delta, 0, timeoutMiliSec);
 	}
 
 	@Override
-	public long increment(String key, int delta, long defaultValue, 
-			long timeoutMiliSec) throws TimeoutException, MemcachedException {
+	public long increment(String key, int delta, long defaultValue, long timeoutMiliSec)
+			throws TimeoutException, MemcachedException {
 		return increment(key, delta, defaultValue, 0, timeoutMiliSec);
 	}
 
 	@Override
-	public long increment(String key, int delta, long defaultValue, 
-			int ttlSec, long timeoutMiliSec) throws TimeoutException, 
-			MemcachedException {
+	public long increment(String key, int delta, long defaultValue, int ttlSec, long timeoutMiliSec)
+			throws TimeoutException, MemcachedException {
 		validateKey(key);
-		
+
 		long result;
 		try {
 			StringBuilder sb = new StringBuilder();
-			//incr <key> <value> [noreply]\r\n
+			// incr <key> <value> [noreply]\r\n
 			sb.append("incr ").append(key).append(" ").append(delta).append("\r\n");
 
 			String res = sendCmdOut(key, sb.toString());
@@ -1158,17 +1158,17 @@ public class QuickCachedClientImpl extends MemcachedClient {
 			}
 
 			if (res.equals("NOT_FOUND")) {
-				boolean flag = add(key, ttlSec, ""+defaultValue, timeoutMiliSec);
-				if(flag==false) {
-					throw new MemcachedException("add failed "+key);
+				boolean flag = add(key, ttlSec, "" + defaultValue, timeoutMiliSec);
+				if (flag == false) {
+					throw new MemcachedException("add failed " + key);
 				}
-				res = ""+defaultValue;
+				res = "" + defaultValue;
 			}
 
 			try {
 				result = Long.parseLong(res);
 			} catch (Exception e) {
-				throw new MemcachedException("invalid response: "+res);
+				throw new MemcachedException("invalid response: " + res);
 			}
 		} catch (TimeoutException ex) {
 			throw ex;
@@ -1179,33 +1179,32 @@ public class QuickCachedClientImpl extends MemcachedClient {
 	}
 
 	@Override
-	public void incrementWithNoReply(String key, int delta) 
-			throws MemcachedException {
+	public void incrementWithNoReply(String key, int delta) throws MemcachedException {
 		validateKey(key);
-		
+
 		try {
 			increment(key, delta, delta, 0, getDefaultTimeoutMiliSec());
 		} catch (TimeoutException ex) {
-			logger.log(Level.WARNING, "Error: "+ ex);
+			logger.log(Level.WARNING, "Error: " + ex);
 		}
 	}
 
 	/* decr */
 	@Override
-	public long decrement(String key, int delta, long defaultValue, 
-			long timeoutMiliSec) throws TimeoutException, MemcachedException {
+	public long decrement(String key, int delta, long defaultValue, long timeoutMiliSec)
+			throws TimeoutException, MemcachedException {
 		return decrement(key, delta, defaultValue, 0, timeoutMiliSec);
 	}
 
 	@Override
-	public long decrement(String key, int delta, long defaultValue, 
-			int ttlSec, long timeoutMiliSec) throws TimeoutException, MemcachedException {
+	public long decrement(String key, int delta, long defaultValue, int ttlSec, long timeoutMiliSec)
+			throws TimeoutException, MemcachedException {
 		validateKey(key);
-		
+
 		long result = -1;
 		try {
 			StringBuilder sb = new StringBuilder();
-			//decr <key> <value> [noreply]\r\n
+			// decr <key> <value> [noreply]\r\n
 			sb.append("decr ").append(key).append(" ").append(delta).append("\r\n");
 
 			ClientInfo ci = new ClientInfo();
@@ -1217,14 +1216,14 @@ public class QuickCachedClientImpl extends MemcachedClient {
 			}
 
 			if (res.equals("NOT_FOUND")) {
-				add(key, ttlSec, ""+defaultValue, timeoutMiliSec);
+				add(key, ttlSec, "" + defaultValue, timeoutMiliSec);
 				return defaultValue;
 			}
 
 			try {
 				result = Long.parseLong(res);
 			} catch (Exception e) {
-				throw new MemcachedException("invalid response "+res);
+				throw new MemcachedException("invalid response " + res);
 			}
 		} catch (TimeoutException ex) {
 			throw ex;
@@ -1235,20 +1234,29 @@ public class QuickCachedClientImpl extends MemcachedClient {
 	}
 
 	@Override
-	public long decrement(String key, int delta, long timeoutMiliSec) 
-			throws TimeoutException, MemcachedException {
+	public long decrement(String key, int delta, long timeoutMiliSec) throws TimeoutException, MemcachedException {
 		return decrement(key, delta, 0, 0, timeoutMiliSec);
 	}
 
 	@Override
-	public void decrementWithNoReply(String key, int delta) 
-			throws MemcachedException {
+	public void decrementWithNoReply(String key, int delta) throws MemcachedException {
 		try {
 			decrement(key, delta, 0, 0, getDefaultTimeoutMiliSec());
 		} catch (TimeoutException ex) {
-			logger.log(Level.WARNING, "Error: "+ex);
+			logger.log(Level.WARNING, "Error: " + ex);
 		}
 	}
+
+	private void doAuth() throws AuthenticationException {
+		if (!(quickcached.getConfig().getUserName().equals(getUserName())
+				&& quickcached.getConfig().getPassword().equals(getPassword()))) {
+			logger.log(Level.SEVERE, "Error:" + "Unable to authenticate the user.");
+			throw new AuthenticationException("Unable to authenticate the user.....");
+		}
+		logger.log(Level.FINE, "Successfully authenticated the user.");
+
+	}
+
 }
 
 class MultiLineResCommandRunner implements Callable<List<GenericResponse>> {
@@ -1257,8 +1265,7 @@ class MultiLineResCommandRunner implements Callable<List<GenericResponse>> {
 	private PooledBlockingClient pbc;
 	private BlockingClientPool blockingClientPool;
 
-	public MultiLineResCommandRunner(BlockingClientPool blockingClientPool, 
-				String command, PooledBlockingClient pbc) {
+	public MultiLineResCommandRunner(BlockingClientPool blockingClientPool, String command, PooledBlockingClient pbc) {
 		this.command = command;
 		this.blockingClientPool = blockingClientPool;
 		this.pbc = pbc;
@@ -1281,13 +1288,9 @@ class MultiLineResCommandRunner implements Callable<List<GenericResponse>> {
 			bc.sendBytes(command, QuickCachedClientImpl.charset);
 
 			/*
-			 VALUE <key> <flags> <bytes> [<cas unique>]\r\n
-			 <data block>\r\n
-			 VALUE <key> <flags> <bytes> [<cas unique>]\r\n
-			 <data block>\r\n
-			 VALUE <key> <flags> <bytes> [<cas unique>]\r\n
-			 <data block>\r\n
-			 END\r\n
+			 * VALUE <key> <flags> <bytes> [<cas unique>]\r\n <data block>\r\n VALUE <key>
+			 * <flags> <bytes> [<cas unique>]\r\n <data block>\r\n VALUE <key> <flags>
+			 * <bytes> [<cas unique>]\r\n <data block>\r\n END\r\n
 			 */
 
 			while (true) {
@@ -1295,44 +1298,44 @@ class MultiLineResCommandRunner implements Callable<List<GenericResponse>> {
 				if (resMain == null) {
 					throw new MemcachedException("we got null reply!");
 				}
-				//System.out.println("resMain "+ resMain);
+				// System.out.println("resMain "+ resMain);
 				if (resMain.startsWith("VALUE ")) {
 					String cmdData[] = resMain.split(" ");
 					if (cmdData.length < 4) {
-						throw new MemcachedException("Bad res : "+resMain);
+						throw new MemcachedException("Bad res : " + resMain);
 					}
 					String valueKey = cmdData[1];
 					int flag = Integer.parseInt(cmdData[2]);
 					int bytes = Integer.parseInt(cmdData[3]);
 					long casValue = 0;
-					if(cmdData.length>=5) {
+					if (cmdData.length >= 5) {
 						casValue = Long.parseLong(cmdData[4]);
 					}
 
 					byte[] dataBuff = null;
-					
-					if(bytes>0) {
+
+					if (bytes > 0) {
 						dataBuff = bc.readBytes(bytes);
 						if (dataBuff == null) {
 							throw new TimeoutException("we don't have data!");
-						}						
+						}
 					}
-					
-					//skip \r\n
+
+					// skip \r\n
 					bc.readBytes(2);
-					
-					if(bytes==0) {
+
+					if (bytes == 0) {
 						continue;
 					}
 
 					if (flag == QuickCachedClientImpl.FLAGS_GENRIC_STRING) {
 						resultList.add(new GenericResponse(valueKey, casValue,
-							new String(dataBuff, QuickCachedClientImpl.charset)));						
+								new String(dataBuff, QuickCachedClientImpl.charset)));
 					} else if (flag == QuickCachedClientImpl.FLAGS_GENRIC_OBJECT) {
-						resultList.add(new GenericResponse(valueKey, casValue,
-							QuickCachedClientImpl.retriveObject(dataBuff)));						
+						resultList.add(
+								new GenericResponse(valueKey, casValue, QuickCachedClientImpl.retriveObject(dataBuff)));
 					} else {
-						throw new MemcachedException("Bad flag! "+flag);
+						throw new MemcachedException("Bad flag! " + flag);
 					}
 				} else if (resMain.equals("END")) {
 					break;
@@ -1368,4 +1371,5 @@ class MultiLineResCommandRunner implements Callable<List<GenericResponse>> {
 			}
 		}
 	}
+
 }

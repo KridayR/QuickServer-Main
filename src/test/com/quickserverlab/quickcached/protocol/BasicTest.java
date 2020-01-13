@@ -22,9 +22,11 @@ public class BasicTest  extends TestCase  {
 	
 	public void setUp(){
 		try {
-			c = MemcachedClient.getInstance();
+			c = MemcachedClient.getInstance("QuickCached");
 			c.setUseBinaryConnection(false);
-			
+			c.setUserName("wibmo");
+			c.setPassword("wibmo123");
+			//c.setEnableAuth(enableAuth);
 			String serverList = System.getProperty(
 				"com.quickserverlab.quickcached.server_list", "localhost:11211");			
 			c.setAddresses(serverList);

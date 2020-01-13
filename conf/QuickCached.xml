@@ -3,6 +3,8 @@
 	<name>QuickCached</name>
 	<port>11211</port>
 	<bind-address>0.0.0.0</bind-address>
+	<user-name>wibmo</user-name>
+	<password>wibmo123</password>
 
 	<!-- business logic classes -->
 	<client-event-handler>
@@ -15,6 +17,9 @@
 	<client-data>
 		com.quickserverlab.quickcached.Data
 	</client-data>
+	<client-authentication-handler>
+		com.quickserverlab.quickcached.handler.UserAuthenticationHandler
+	</client-authentication-handler>
 
 	<!-- 3 hours - in miliseconds-->
 	<timeout>10800000</timeout>
@@ -117,6 +122,12 @@
 		<property>
 			<property-name>MEMCACHED_VERSION_TO_SHOW</property-name>
 			<property-value>1.4.13</property-value>
+		</property>	
+		
+		
+		<property>
+			<property-name>PASSWORD</property-name>
+			<property-value>password</property-value>
 		</property>	
 		
 		<property>

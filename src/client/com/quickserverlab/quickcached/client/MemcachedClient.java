@@ -64,6 +64,26 @@ public abstract class MemcachedClient {
 	private long maxSizeAllowedForValue = 1024*1024*5;//5mb
 	private int maxSizeAllowedForKey = 250;
 	
+	private static String userName;
+	private static String password;
+	
+	
+	public static String getUserName() {
+		return userName;
+	}
+
+	public static void setUserName(String userName) {
+		MemcachedClient.userName = userName;
+	}
+	
+	public static String getPassword() {
+		return password;
+	}
+
+	public static void setPassword(String password) {
+		MemcachedClient.password = password;
+	}
+
 	public long getDefaultTimeoutMiliSec() {
 		return defaultTimeoutMiliSec;
 	}
